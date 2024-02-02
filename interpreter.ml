@@ -51,10 +51,11 @@ type valor =
   | VPair of valor * valor
   | VClos  of ident * expr * renv
   | VRclos of ident * ident * expr * renv
-  | Skip of memory
-  | Address of int * memory
+  | Skip
+  | Address of int
 and renv = (ident * valor) list
-and memory = (int * valor) list
+
+type memory = (int * valor) list
 
 (* função auxiliar que converte valor para string *)
 
@@ -67,8 +68,8 @@ let rec vtos (v: valor) : string =
       "(" ^ vtos v1 ^ "," ^ vtos v1 ^ ")"
   | VClos _ ->  "fn"
   | VRclos _ -> "fn"
-  | Skip _ -> "skip"
-  | Address(n, _) -> "Address" ^ string_of_int n
+  | Skip  -> "skip"
+  | Address n -> "Address" ^ string_of_int n
 (* funções polimórficas para ambientes *)
 
 let rec lookup a k =
@@ -88,10 +89,10 @@ let rec restore list key new_value =
   | [] -> []
 
 
-  let rec print_memory mem =
+  let rec memory_to_string mem =
     match mem with
-    [] -> print_string "\n"
-    | (address, value) :: tail -> print_string ("(" ^ string_of_int address ^ ", " ^ vtos value ^ ")" ^ ", ") ; print_memory tail
+    [] ->  "\n"
+    | (address, value) :: tail -> "(" ^ string_of_int address ^ ", " ^ vtos value ^ ")" ^ ", " ^ memory_to_string tail
 (* exceções que não devem ocorrer  *)
 
 exception BugParser of string
@@ -233,64 +234,63 @@ let compute (oper: op) (v1: valor) (v2: valor) : valor =
   | _ -> raise BugTypeInfer
 
 
-let rec eval (mem: memory) (renv:renv) (e:expr) : valor =
-  print_memory mem;
+let rec eval (mem: memory) (renv:renv) (e:expr) : valor * memory =
+  print_string (memory_to_string mem);
   match e with
-    Num n -> VNum n
-  | True -> VTrue
-  | False -> VFalse
+    Num n -> (VNum n, mem)
+  | True -> (VTrue, mem)
+  | False -> (VFalse, mem)
 
   | Var x ->
       (match lookup renv x with
-         Some v -> v
+         Some v -> (v, mem)
        | None -> raise BugTypeInfer)
       
   | Binop(oper,e1,e2) ->
-      let v1 = eval mem renv e1 in
-      let v2 = eval mem renv e2 in
-      compute oper v1 v2
+      let (v1, mem') = eval mem renv e1 in
+      let (v2, mem'') = eval mem' renv e2 in
+      (compute oper v1 v2, mem'')
 
   | Pair(e1,e2) ->
-      let v1 = eval mem renv e1 in
-      let v2 = eval mem renv e2
-      in VPair(v1,v2)
+      let (v1, mem') = eval mem renv e1 in
+      let (v2, mem'') = eval mem' renv e2
+      in (VPair(v1,v2), mem'')
 
   | Fst e ->
       (match eval mem renv e with
-       | VPair(v1,_) -> v1
+       | (VPair(v1,_), mem') -> (v1, mem')
        | _ -> raise BugTypeInfer)
 
   | Snd e ->
       (match eval mem renv e with
-       | VPair(_,v2) -> v2
+       | (VPair(_,v2), mem') -> (v2, mem')
        | _ -> raise BugTypeInfer)
-
 
   | If(e1,e2,e3) ->
       (match eval mem renv e1 with
-         VTrue  -> eval mem renv e2
-       | VFalse -> eval mem renv e3
+         (VTrue, mem')  -> eval mem' renv e2
+       | (VFalse, mem') -> eval mem' renv e3
        | _ -> raise BugTypeInfer )
 
-  | Fn (x,_,e1) ->  VClos(x,e1,renv)
+  | Fn (x,_,e1) ->  (VClos(x,e1,renv), mem)
 
   | App(e1,e2) ->
-      let v1 = eval mem renv e1 in
-      let v2 = eval mem renv e2 in
+      let (v1, mem') = eval mem renv e1 in
+      let (v2, mem'') = eval mem' renv e2 in
       (match v1 with
          VClos(x,ebdy,renv') ->
            let renv'' = update renv' x v2
-           in eval mem renv'' ebdy
+           in eval mem'' renv'' ebdy
 
        | VRclos(f,x,ebdy,renv') ->
            let renv''  = update renv' x v2 in
            let renv''' = update renv'' f v1
-           in eval mem renv''' ebdy
+           in eval mem'' renv''' ebdy
        | _ -> raise BugTypeInfer)
 
   | Let(x,_,e1,e2) ->
-      let v1 = eval mem renv e1
-      in eval mem (update renv x v1) e2
+      let (v1, mem') = eval mem renv e1
+      in eval mem' (update renv x v1) e2
 
   | LetRec(f,TyFn(t1,t2),Fn(x,tx,e1), e2) when t1 = tx ->
       let renv'= update renv f (VRclos(f,x,e1,renv))
@@ -300,39 +300,41 @@ let rec eval (mem: memory) (renv:renv) (e:expr) : valor =
 
   | Asg(e1, e2) -> 
       (match eval mem renv e1 with
-          Address(v, mem') -> (match lookup mem' v with
-              Some valor -> 
-                let new_value = eval mem' renv e2 in
-                let mem'' = restore mem' v new_value in
-                 Skip(mem'')
+          (Address(v), mem') -> (
+            match lookup mem' v with
+              Some _ -> 
+                let (new_value, mem'') = eval mem' renv e2 in
+                let mem''' = restore mem'' v new_value in
+                (Skip, mem''')
               | None -> raise (BugParser "não há valor nesse endereço buscado"))
           | _ -> raise (BugParser "um valor que não é endereço foi usado para acessar a memória"))
 
   | Dref(e) ->
     (match eval mem renv e with
-      Address(v, mem') -> (match lookup mem' v with
-      Some valor -> valor
-      | None -> raise (BugParser "não há valor nesse endereço buscado"))
+      (Address(v), mem') -> (
+        match lookup mem' v with
+          Some valor -> (valor, mem')
+          | None -> raise (BugParser "não há valor nesse endereço buscado"))
       | _ -> raise (BugParser "um valor que não é endereço foi usado para acessar a memória"))
 
   | New (e) -> 
-    let value = eval mem renv e in
-    let new_address = (match mem with
-                        [] -> 0
-                        | (head_address, _ ) :: _ -> head_address + 1
-                          ) in
-                          let new_mem = update mem new_address value in
-                          Address(new_address, new_mem) 
+    let (value, mem') = eval mem renv e in
+    let new_address = (
+      match mem with
+        [] -> 0
+        | (head_address, _ ) :: _ -> head_address + 1) in
+    let mem'' = update mem' new_address value in
+    (Address(new_address), mem'') 
 
   | Seq (e1, e2) -> 
     (match eval mem renv e1 with
-      Skip(mem') -> eval mem' renv e2
+      (Skip, mem') -> eval mem' renv e2
       | _ -> raise (BugParser "primeira expressão não é do tipo skip")
     )
 
   | Whl (e1, e2) -> raise NotImplemented
     
-  | Skip -> Skip(mem)
+  | Skip -> (Skip, mem)
 
                   
 (* função auxiliar que converte tipo para string *)
@@ -351,8 +353,8 @@ let rec ttos (t:tipo) : string =
 let int_bse (e:expr) : unit =
   try
     let t = typeinfer [] e in
-    let v = eval [] [] e
-    in  print_string ((vtos v) ^ " : " ^ (ttos t))
+    let (v, mem) = eval [] [] e
+    in  print_string ((vtos v) ^ " : " ^ (ttos t) ^ "\nMemory: " ^ (memory_to_string mem))
   with
     TypeError msg ->  print_string ("erro de tipo - " ^ msg)
    
