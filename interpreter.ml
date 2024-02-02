@@ -50,11 +50,12 @@ type valor =
   | VFalse
   | VPair of valor * valor
   | VClos  of ident * expr * renv
-  | VRclos of ident * ident * expr * renv 
-and 
-  renv = (ident * valor) list
-    
-    
+  | VRclos of ident * ident * expr * renv
+  | Skip of memory
+  | Address of int
+and renv = (ident * valor) list
+and memory = (int * valor) list
+
 (* funções polimórficas para ambientes *)
 
 let rec lookup a k =
@@ -67,7 +68,7 @@ let update a k i =
 
 (* exceções que não devem ocorrer  *)
 
-exception BugParser
+exception BugParser of string
 exception BugTypeInfer
 exception NotImplemented
   
@@ -88,7 +89,7 @@ let rec typeinfer (tenv:tenv) (e:expr) : tipo =
   | Var x ->
       (match lookup tenv x with
          Some t -> t
-       | None -> raise (TypeError ("variavel nao declarada: " ^ x)))
+       | None -> raise (TypeError ("variábel não declarada: " ^ x)))
 
   (* TBool *)
   | True  -> TyBool
@@ -102,7 +103,7 @@ let rec typeinfer (tenv:tenv) (e:expr) : tipo =
         (match oper with
            Sum | Sub | Mult -> TyInt
          | Eq | Lt | Gt | Geq | Leq -> TyBool)
-      else raise (TypeError "operando nao é do tipo int")
+      else raise (TypeError "operando não é do tipo int")
 
   (* TPair *)
   | Pair(e1,e2) -> TyPair(typeinfer tenv e1, typeinfer tenv e2)
@@ -142,7 +143,7 @@ let rec typeinfer (tenv:tenv) (e:expr) : tipo =
   (* TLet *)
   | Let(x,t,e1,e2) ->
       if (typeinfer tenv e1) = t then typeinfer (update tenv x t) e2
-      else raise (TypeError "expr nao é do tipo declarado em Let" )
+      else raise (TypeError "expr não é do tipo declarado em Let" )
 
   (* TLetRec *)
   | LetRec(f,(TyFn(t1,t2) as tf), Fn(x,tx,e1), e2) ->
@@ -150,23 +151,23 @@ let rec typeinfer (tenv:tenv) (e:expr) : tipo =
       let tenv_com_tf_tx = update tenv_com_tf x tx in
       if (typeinfer tenv_com_tf_tx e1) = t2
       then typeinfer tenv_com_tf e2
-      else raise (TypeError "tipo da funcao diferente do declarado")
+      else raise (TypeError "tipo da função diferente do declarado")
 
   (* TLetRec mal construido*)
-  | LetRec _ -> raise (TypeError "tipos das funcoes nao estao corretamente definidos")
+  | LetRec _ -> raise (TypeError "tipos das funções não estão corretamente definidos")
 
   (* Assignment *)
   | Asg(e1, e2) -> 
       (match typeinfer tenv e1 with
        TyRef(t) -> if (typeinfer tenv e2) = t then TyUnit
-       else raise (TypeError "atribuicao de um tipo para uma referencia de outra tipo")
-       | _ -> raise(TypeError "atribuicao para uma expressao que nao é referencia a algum tipo"))
+       else raise (TypeError "atribuição de um tipo para uma referência de outra tipo")
+       | _ -> raise(TypeError "atribuição para uma expressão que não é referência a algum tipo"))
   
   (* Dereference *)
   | Dref(e) ->
       (match typeinfer tenv e with
         TyRef(t) -> t
-        | _ -> raise(TypeError "rereferencia de uma expressao que nao é referencia a algum tipo"))
+        | _ -> raise(TypeError "rereferência de uma expressão que não é referência a algum tipo"))
   
   (* New *)
   | New (e) ->
@@ -176,14 +177,14 @@ let rec typeinfer (tenv:tenv) (e:expr) : tipo =
   (* Sequence of commands *)
   | Seq (e1, e2) ->
       if (typeinfer tenv e1) = TyUnit then (typeinfer tenv e2)
-      else raise (TypeError "primeiro comando é de um tipo nao unit")
+      else raise (TypeError "primeiro comando é de um tipo não unit")
   
   (* While *)
   | Whl (e1, e2) -> 
     if (typeinfer tenv e1) = TyBool then
       if (typeinfer tenv e2) = TyUnit then TyUnit
-      else raise (TypeError "o comando interno do while é de um tipo nao unit")
-    else raise (TypeError "a condicao do while nao é do tipo bool")
+      else raise (TypeError "o comando interno do while é de um tipo não unit")
+    else raise (TypeError "a condição do while não é do tipo bool")
   
   (* Skip *)
   | Skip -> TyUnit
@@ -206,7 +207,7 @@ let compute (oper: op) (v1: valor) (v2: valor) : valor =
   | _ -> raise BugTypeInfer
 
 
-let rec eval (renv:renv) (e:expr) : valor =
+let rec eval (mem: memory) (renv:renv) (e:expr) : valor =
   match e with
     Num n -> VNum n
   | True -> VTrue
@@ -218,59 +219,77 @@ let rec eval (renv:renv) (e:expr) : valor =
        | None -> raise BugTypeInfer)
       
   | Binop(oper,e1,e2) ->
-      let v1 = eval renv e1 in
-      let v2 = eval renv e2 in
+      let v1 = eval mem renv e1 in
+      let v2 = eval mem renv e2 in
       compute oper v1 v2
 
   | Pair(e1,e2) ->
-      let v1 = eval renv e1 in
-      let v2 = eval renv e2
+      let v1 = eval mem renv e1 in
+      let v2 = eval mem renv e2
       in VPair(v1,v2)
 
   | Fst e ->
-      (match eval renv e with
+      (match eval mem renv e with
        | VPair(v1,_) -> v1
        | _ -> raise BugTypeInfer)
 
   | Snd e ->
-      (match eval renv e with
+      (match eval mem renv e with
        | VPair(_,v2) -> v2
        | _ -> raise BugTypeInfer)
 
 
   | If(e1,e2,e3) ->
-      (match eval renv e1 with
-         VTrue  -> eval renv e2
-       | VFalse -> eval renv e3
+      (match eval mem renv e1 with
+         VTrue  -> eval mem renv e2
+       | VFalse -> eval mem renv e3
        | _ -> raise BugTypeInfer )
 
   | Fn (x,_,e1) ->  VClos(x,e1,renv)
 
   | App(e1,e2) ->
-      let v1 = eval renv e1 in
-      let v2 = eval renv e2 in
+      let v1 = eval mem renv e1 in
+      let v2 = eval mem renv e2 in
       (match v1 with
          VClos(x,ebdy,renv') ->
            let renv'' = update renv' x v2
-           in eval renv'' ebdy
+           in eval mem renv'' ebdy
 
        | VRclos(f,x,ebdy,renv') ->
            let renv''  = update renv' x v2 in
            let renv''' = update renv'' f v1
-           in eval renv''' ebdy
+           in eval mem renv''' ebdy
        | _ -> raise BugTypeInfer)
 
   | Let(x,_,e1,e2) ->
-      let v1 = eval renv e1
-      in eval (update renv x v1) e2
+      let v1 = eval mem renv e1
+      in eval mem (update renv x v1) e2
 
   | LetRec(f,TyFn(t1,t2),Fn(x,tx,e1), e2) when t1 = tx ->
       let renv'= update renv f (VRclos(f,x,e1,renv))
-      in eval renv' e2
+      in eval mem renv' e2
         
-        
-  | LetRec _ -> raise BugParser
-  | _ -> raise NotImplemented             
+  | LetRec _ -> raise (BugParser "funções recursivas não estão corretamente definidas")
+
+  | Asg(e1, e2) -> 
+      (match eval mem renv e1 with
+          Address(v) -> (match lookup mem v with
+              Some valor -> 
+                let new_value = eval mem renv e2 in
+                let new_mem = update mem v new_value in
+                 Skip(new_mem)
+              | None -> raise (BugParser "não há valor nesse endereço buscado"))
+          | _ -> raise (BugParser "um valor que não é endereço foi usado para acessar a memória"))
+
+  | Dref(e) -> raise NotImplemented
+
+  | New (e) -> raise NotImplemented
+
+  | Seq (e1, e2) -> raise NotImplemented
+
+  | Whl (e1, e2) -> raise NotImplemented
+
+  | Skip -> raise NotImplemented
                   
 (* função auxiliar que converte tipo para string *)
 
@@ -293,23 +312,23 @@ let rec vtos (v: valor) : string =
       "(" ^ vtos v1 ^ "," ^ vtos v1 ^ ")"
   | VClos _ ->  "fn"
   | VRclos _ -> "fn"
+  | Skip _ -> "skip"
+  | Address n -> "Address" ^ string_of_int n
 
 (* principal do interpretador *)
 
 let int_bse (e:expr) : unit =
   try
     let t = typeinfer [] e in
-    let v = eval [] e
+    let v = eval [] [] e
     in  print_string ((vtos v) ^ " : " ^ (ttos t))
   with
     TypeError msg ->  print_string ("erro de tipo - " ^ msg)
    
  (* as exceções abaixo nao podem ocorrer   *)
   | BugTypeInfer  ->  print_string "corrigir bug em typeinfer"
-  | BugParser     ->  print_string "corrigir bug no parser para let rec"
+  | BugParser error    ->  print_string error
                         
-
-
 
  (* +++++++++++++++++++++++++++++++++++++++*)
  (*                TESTES                  *)
