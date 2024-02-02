@@ -52,7 +52,7 @@ type valor =
   | VClos  of ident * expr * renv
   | VRclos of ident * ident * expr * renv
   | Skip of memory
-  | Address of int
+  | Address of int * memory
 and renv = (ident * valor) list
 and memory = (int * valor) list
 
@@ -65,6 +65,14 @@ let rec lookup a k =
        
 let update a k i =
   (k,i) :: a   
+
+let rec restore list key new_value =
+  match list with
+  (current_key, value) :: tail ->
+     if current_key = key then 
+      (key, new_value) :: restore list key new_value 
+    else (current_key, value) :: restore list key new_value
+  | [] -> []
 
 (* exceções que não devem ocorrer  *)
 
@@ -273,23 +281,39 @@ let rec eval (mem: memory) (renv:renv) (e:expr) : valor =
 
   | Asg(e1, e2) -> 
       (match eval mem renv e1 with
-          Address(v) -> (match lookup mem v with
+          Address(v, mem') -> (match lookup mem' v with
               Some valor -> 
-                let new_value = eval mem renv e2 in
-                let new_mem = update mem v new_value in
-                 Skip(new_mem)
+                let new_value = eval mem' renv e2 in
+                let mem'' = restore mem' v new_value in
+                 Skip(mem'')
               | None -> raise (BugParser "não há valor nesse endereço buscado"))
           | _ -> raise (BugParser "um valor que não é endereço foi usado para acessar a memória"))
 
-  | Dref(e) -> raise NotImplemented
+  | Dref(e) ->
+    (match eval mem renv e with
+      Address(v, mem') -> (match lookup mem' v with
+      Some valor -> valor
+      | None -> raise (BugParser "não há valor nesse endereço buscado"))
+      | _ -> raise (BugParser "um valor que não é endereço foi usado para acessar a memória"))
 
-  | New (e) -> raise NotImplemented
+  | New (e) -> 
+    let value = eval mem renv e in
+    let new_address = (match mem with
+    [] -> 0
+    | (head_address, _) :: _ -> head_address + 1
+    ) in
+    let new_mem = update mem new_address value in
+    Address(new_address, new_mem) 
 
-  | Seq (e1, e2) -> raise NotImplemented
+  | Seq (e1, e2) -> 
+    (match eval mem renv e1 with
+      Skip(mem') -> eval mem' renv e2
+      | _ -> raise (BugParser "primeira expressão não é do tipo skip")
+    )
 
   | Whl (e1, e2) -> raise NotImplemented
-
-  | Skip -> raise NotImplemented
+    
+  | Skip -> Skip(mem)
                   
 (* função auxiliar que converte tipo para string *)
 
@@ -313,7 +337,7 @@ let rec vtos (v: valor) : string =
   | VClos _ ->  "fn"
   | VRclos _ -> "fn"
   | Skip _ -> "skip"
-  | Address n -> "Address" ^ string_of_int n
+  | Address(n, _) -> "Address" ^ string_of_int n
 
 (* principal do interpretador *)
 
