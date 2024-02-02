@@ -1,9 +1,8 @@
 (*++++++++++++++++++++++++++++++++++++++*)
-(*  Interpretador para L1               *)
+(*  Interpretador para L2               *)
 (*   - inferência de tipos              *)
 (*   - avaliador big step com ambiente  *)
 (*++++++++++++++++++++++++++++++++++++++*)
-
 
 
 (**+++++++++++++++++++++++++++++++++++++++++*)
@@ -63,40 +62,39 @@ let rec lookup a k =
     [] -> None
   | (y,i) :: tl -> if (y=k) then Some i else lookup tl k 
        
-let rec update a k i =
+let update a k i =
   (k,i) :: a   
 
 (* exceções que não devem ocorrer  *)
 
 exception BugParser
-  
 exception BugTypeInfer
+exception NotImplemented
   
-  (**+++++++++++++++++++++++++++++++++++++++++*)
+
+(**+++++++++++++++++++++++++++++++++++++++++*)
 (*         INFERÊNCIA DE TIPOS              *)
 (*++++++++++++++++++++++++++++++++++++++++++*)
 
-
 exception TypeError of string
-
 
 let rec typeinfer (tenv:tenv) (e:expr) : tipo =
   match e with
 
-    (* TInt  *)
+  (* TInt  *)
   | Num _ -> TyInt
 
-    (* TVar *)
+  (* TVar *)
   | Var x ->
       (match lookup tenv x with
          Some t -> t
-       | None -> raise (TypeError ("variavel nao declarada:" ^ x)))
+       | None -> raise (TypeError ("variavel nao declarada: " ^ x)))
 
-    (* TBool *)
+  (* TBool *)
   | True  -> TyBool
   | False -> TyBool
 
-    (*TOP+  e outras para demais peradores binários *)
+  (*TOP+  e outras para demais peradores binários *)
   | Binop(oper,e1,e2) ->
       let t1 = typeinfer tenv e1 in
       let t2 = typeinfer tenv e2 in
@@ -106,20 +104,20 @@ let rec typeinfer (tenv:tenv) (e:expr) : tipo =
          | Eq | Lt | Gt | Geq | Leq -> TyBool)
       else raise (TypeError "operando nao é do tipo int")
 
-    (* TPair *)
+  (* TPair *)
   | Pair(e1,e2) -> TyPair(typeinfer tenv e1, typeinfer tenv e2)
   (* TFst *)
   | Fst e1 ->
       (match typeinfer tenv e1 with
          TyPair(t1,_) -> t1
        | _ -> raise (TypeError "fst espera tipo par"))
-    (* TSnd  *)
+  (* TSnd  *)
   | Snd e1 ->
       (match typeinfer tenv e1 with
          TyPair(_,t2) -> t2
        | _ -> raise (TypeError "fst espera tipo par"))
 
-    (* TIf  *)
+  (* TIf  *)
   | If(e1,e2,e3) ->
       (match typeinfer tenv e1 with
          TyBool ->
@@ -129,39 +127,71 @@ let rec typeinfer (tenv:tenv) (e:expr) : tipo =
            else raise (TypeError "then/else com tipos diferentes")
        | _ -> raise (TypeError "condição de IF não é do tipo bool"))
 
-    (* TFn *)
+  (* TFn *)
   | Fn(x,t,e1) ->
       let t1 = typeinfer (update tenv x t) e1
       in TyFn(t,t1)
 
-    (* TApp *)
+  (* TApp *)
   | App(e1,e2) ->
       (match typeinfer tenv e1 with
          TyFn(t, t') ->  if (typeinfer tenv e2) = t then t'
            else raise (TypeError "tipo argumento errado" )
        | _ -> raise (TypeError "tipo função era esperado"))
 
-    (* TLet *)
+  (* TLet *)
   | Let(x,t,e1,e2) ->
       if (typeinfer tenv e1) = t then typeinfer (update tenv x t) e2
       else raise (TypeError "expr nao é do tipo declarado em Let" )
 
-    (* TLetRec *)
+  (* TLetRec *)
   | LetRec(f,(TyFn(t1,t2) as tf), Fn(x,tx,e1), e2) ->
       let tenv_com_tf = update tenv f tf in
       let tenv_com_tf_tx = update tenv_com_tf x tx in
       if (typeinfer tenv_com_tf_tx e1) = t2
       then typeinfer tenv_com_tf e2
       else raise (TypeError "tipo da funcao diferente do declarado")
-  | LetRec _ -> raise BugParser
-                  
+
+  (* TLetRec mal construido*)
+  | LetRec _ -> raise (TypeError "tipos das funcoes nao estao corretamente definidos")
+
+  (* Assignment *)
+  | Asg(e1, e2) -> 
+      (match typeinfer tenv e1 with
+       TyRef(t) -> if (typeinfer tenv e2) = t then TyUnit
+       else raise (TypeError "atribuicao de um tipo para uma referencia de outra tipo")
+       | _ -> raise(TypeError "atribuicao para uma expressao que nao é referencia a algum tipo"))
+  
+  (* Dereference *)
+  | Dref(e) ->
+      (match typeinfer tenv e with
+        TyRef(t) -> t
+        | _ -> raise(TypeError "rereferencia de uma expressao que nao é referencia a algum tipo"))
+  
+  (* New *)
+  | New (e) ->
+      let t = typeinfer tenv e in
+      TyRef(t)
+  
+  (* Sequence of commands *)
+  | Seq (e1, e2) ->
+      if (typeinfer tenv e1) = TyUnit then (typeinfer tenv e2)
+      else raise (TypeError "primeiro comando é de um tipo nao unit")
+  
+  (* While *)
+  | Whl (e1, e2) -> 
+    if (typeinfer tenv e1) = TyBool then
+      if (typeinfer tenv e2) = TyUnit then TyUnit
+      else raise (TypeError "o comando interno do while é de um tipo nao unit")
+    else raise (TypeError "a condicao do while nao é do tipo bool")
+  
+  (* Skip *)
+  | Skip -> TyUnit
+
   
 (**+++++++++++++++++++++++++++++++++++++++++*)
 (*                 AVALIADOR                *)
 (*++++++++++++++++++++++++++++++++++++++++++*)
-
-
-
 
 let compute (oper: op) (v1: valor) (v2: valor) : valor =
   match (oper, v1, v2) with
@@ -240,7 +270,7 @@ let rec eval (renv:renv) (e:expr) : valor =
         
         
   | LetRec _ -> raise BugParser
-                  
+  | _ -> raise NotImplemented             
                   
 (* função auxiliar que converte tipo para string *)
 
@@ -250,6 +280,7 @@ let rec ttos (t:tipo) : string =
   | TyBool -> "bool"
   | TyFn(t1,t2)   ->  "("  ^ (ttos t1) ^ " --> " ^ (ttos t2) ^ ")"
   | TyPair(t1,t2) ->  "("  ^ (ttos t1) ^ " * "   ^ (ttos t2) ^ ")"
+  | _-> raise NotImplemented
 
 (* função auxiliar que converte valor para string *)
 
