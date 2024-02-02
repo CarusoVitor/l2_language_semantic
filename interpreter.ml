@@ -56,6 +56,19 @@ type valor =
 and renv = (ident * valor) list
 and memory = (int * valor) list
 
+(* função auxiliar que converte valor para string *)
+
+let rec vtos (v: valor) : string =
+  match v with
+    VNum n -> string_of_int n
+  | VTrue -> "true"
+  | VFalse -> "false"
+  | VPair(v1, v2) ->
+      "(" ^ vtos v1 ^ "," ^ vtos v1 ^ ")"
+  | VClos _ ->  "fn"
+  | VRclos _ -> "fn"
+  | Skip _ -> "skip"
+  | Address(n, _) -> "Address" ^ string_of_int n
 (* funções polimórficas para ambientes *)
 
 let rec lookup a k =
@@ -70,10 +83,15 @@ let rec restore list key new_value =
   match list with
   (current_key, value) :: tail ->
      if current_key = key then 
-      (key, new_value) :: restore list key new_value 
-    else (current_key, value) :: restore list key new_value
+      (key, new_value) :: restore tail key new_value 
+    else (current_key, value) :: restore tail key new_value
   | [] -> []
 
+
+  let rec print_memory mem =
+    match mem with
+    [] -> print_string "\n"
+    | (address, value) :: tail -> print_string ("(" ^ string_of_int address ^ ", " ^ vtos value ^ ")" ^ ", ") ; print_memory tail
 (* exceções que não devem ocorrer  *)
 
 exception BugParser of string
@@ -175,7 +193,7 @@ let rec typeinfer (tenv:tenv) (e:expr) : tipo =
   | Dref(e) ->
       (match typeinfer tenv e with
         TyRef(t) -> t
-        | _ -> raise(TypeError "rereferência de uma expressão que não é referência a algum tipo"))
+        | _ -> raise(TypeError "dereferência de uma expressão que não é referência a algum tipo"))
   
   (* New *)
   | New (e) ->
@@ -216,6 +234,7 @@ let compute (oper: op) (v1: valor) (v2: valor) : valor =
 
 
 let rec eval (mem: memory) (renv:renv) (e:expr) : valor =
+  print_memory mem;
   match e with
     Num n -> VNum n
   | True -> VTrue
@@ -299,11 +318,11 @@ let rec eval (mem: memory) (renv:renv) (e:expr) : valor =
   | New (e) -> 
     let value = eval mem renv e in
     let new_address = (match mem with
-    [] -> 0
-    | (head_address, _) :: _ -> head_address + 1
-    ) in
-    let new_mem = update mem new_address value in
-    Address(new_address, new_mem) 
+                        [] -> 0
+                        | (head_address, _ ) :: _ -> head_address + 1
+                          ) in
+                          let new_mem = update mem new_address value in
+                          Address(new_address, new_mem) 
 
   | Seq (e1, e2) -> 
     (match eval mem renv e1 with
@@ -314,6 +333,7 @@ let rec eval (mem: memory) (renv:renv) (e:expr) : valor =
   | Whl (e1, e2) -> raise NotImplemented
     
   | Skip -> Skip(mem)
+
                   
 (* função auxiliar que converte tipo para string *)
 
@@ -325,19 +345,6 @@ let rec ttos (t:tipo) : string =
   | TyPair(t1,t2) ->  "("  ^ (ttos t1) ^ " * "   ^ (ttos t2) ^ ")"
   | _-> raise NotImplemented
 
-(* função auxiliar que converte valor para string *)
-
-let rec vtos (v: valor) : string =
-  match v with
-    VNum n -> string_of_int n
-  | VTrue -> "true"
-  | VFalse -> "false"
-  | VPair(v1, v2) ->
-      "(" ^ vtos v1 ^ "," ^ vtos v1 ^ ")"
-  | VClos _ ->  "fn"
-  | VRclos _ -> "fn"
-  | Skip _ -> "skip"
-  | Address(n, _) -> "Address" ^ string_of_int n
 
 (* principal do interpretador *)
 
@@ -387,9 +394,7 @@ let e1  = Let("foo", TyFn(TyInt,TyInt), Fn("y", TyInt, Binop(Sum, Var "x", Var "
 
 let tst2 = Let("x", TyInt, Num(2), e1) 
 
-
-  
-    
-    
-              
-              
+let teste1 = Let("x", TyRef TyInt, New (Num 3),
+                 Let("y", TyInt, Dref (Var "x"), 
+                     Seq(Asg(Var "x", Binop(Sum, Dref(Var "x"), Num 1)), 
+                         Binop(Sum, Var "y",  Dref (Var "x"))))) 
