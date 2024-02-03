@@ -332,7 +332,11 @@ let rec eval (mem: memory) (renv:renv) (e:expr) : valor * memory =
       | _ -> raise (BugParser "primeira expressão não é do tipo skip")
     )
 
-  | Whl (e1, e2) -> raise NotImplemented
+  | Whl (e1, e2) -> 
+      (match eval mem renv e1 with
+      (VTrue, mem')  -> eval mem' renv (Seq(e2, Whl(e1, e2)))
+    | (VFalse, mem') -> (Skip, mem')
+    | _ -> raise BugTypeInfer )
     
   | Skip -> (Skip, mem)
 
